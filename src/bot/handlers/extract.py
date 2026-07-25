@@ -1,7 +1,6 @@
 import asyncio
 import os
 import random
-import shlex
 
 from aiogram import Router, types
 from aiogram.filters import Command
@@ -10,7 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.database.repos.log import log_usage
 from src.services.cache import cache_get, cache_set, check_cooldown, check_rate_limit
-from src.services.search import SORT_KEYS, search_ulp
+from src.services.search import search_ulp
 
 router = Router()
 
@@ -29,38 +28,8 @@ PAGE_SIZE = 30
 
 SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-USAGE = (
-    "⚠️ Usage: <code>/extract [format] [keyword] [--sort=KEY] [--file=name.txt]</code>\n\n"
-    "Formats: mail:pass, user:pass, number:pass, raw\n"
-    "Sort keys: url, login, password, domain, email, none\n\n"
-    "Example: <code>/extract mail:pass gmail --sort=email --file=db1.txt</code>"
-)
 
-
-def _parse_args(text: str) -> tuple[str, str, str | None, str | None]:
-    parts = shlex.split(text)[1:] if len(shlex.split(text)) > 1 else []
-    if len(parts) < 2:
-        return "", "", None, None
-
-    fmt_key = parts[0].lower()
-    keyword_parts: list[str] = []
-    sort_by: str | None = None
-    file_filter: str | None = None
-
-    for part in parts[1:]:
-        if part.startswith("--sort="):
-            val = part.split("=", 1)[1]
-            if val in SORT_KEYS or val == "none":
-                sort_by = val
-        elif part.startswith("--file="):
-            file_filter = part.split("=", 1)[1]
-        else:
-            keyword_parts.append(part)
-
-    return fmt_key, " ".join(keyword_parts), sort_by, file_filter
-
-
-async def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
+def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
     async def spin():
         i = 0
         while True:
@@ -70,7 +39,6 @@ async def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
                 await asyncio.sleep(0.8)
             except Exception:
                 break
-
     return asyncio.create_task(spin())
 
 
@@ -83,11 +51,17 @@ async def cmd_extract(message: types.Message) -> None:
         await message.answer("⏳ Rate limit exceeded. Please wait a moment.")
         return
 
-    fmt_key, keyword, sort_by, file_filter = _parse_args(message.text)
-
-    if not fmt_key or not keyword:
-        await message.answer(USAGE)
+    parts = message.text.split(" ", 2)
+    if len(parts) < 3:
+        await message.answer(
+            "⚠️ Usage: <code>/extract [format] [keyword]</code>\n\n"
+            "Formats: mail:pass, user:pass, number:pass, raw\n\n"
+            "Example: <code>/extract mail:pass gmail.com</code>",
+        )
         return
+
+    fmt_key = parts[1].lower()
+    keyword = parts[2].strip()
 
     if fmt_key not in FORMATS:
         await message.answer(f"❌ Unknown format: <b>{fmt_key}</b>\nValid: mail:pass, user:pass, number:pass, raw")
@@ -100,22 +74,19 @@ async def cmd_extract(message: types.Message) -> None:
         return
 
     format_type = FORMATS[fmt_key]
-    cache_key = f"search:extract:{fmt_key}:{keyword.lower()}:{sort_by or 'none'}:{file_filter or 'all'}:{MAX_RESULTS}"
+    cache_key = f"search:extract:{fmt_key}:{keyword.lower()}:{MAX_RESULTS}"
 
     cached = await cache_get(cache_key)
     if cached is not None:
         results, total = cached
-        await _send_paginated(message, fmt_key, keyword, results, total, sort_by, file_filter, 0)
+        await _send_paginated(message, fmt_key, keyword, results, total, 0)
         await log_usage(user_id, "extract", full_key, len(results))
         return
 
-    spinner_label = f"Extracting <b>{fmt_key}</b> for: <b>{keyword}</b>" + (f" (sorted: {sort_by})" if sort_by and sort_by != "none" else "") + (f" [file: {file_filter}]" if file_filter else "")
-    progress_msg = await message.answer(f"🔍 {spinner_label}...")
-    task = await _start_spinner(progress_msg, spinner_label)
+    progress_msg = await message.answer(f"⠋ Extracting <b>{fmt_key}</b> for: <b>{keyword}</b>...")
+    task = _start_spinner(progress_msg, f"Extracting <b>{fmt_key}</b> for: <b>{keyword}</b>")
 
-    results, total = await search_ulp(
-        keyword, max_results=MAX_RESULTS, format_type=format_type, sort_by=sort_by, file_filter=file_filter
-    )
+    results, total = await search_ulp(keyword, max_results=MAX_RESULTS, format_type=format_type)
 
     task.cancel()
     try:
@@ -134,7 +105,7 @@ async def cmd_extract(message: types.Message) -> None:
 
     await cache_set(cache_key, (results, total), ttl=300)
     await log_usage(user_id, "extract", full_key, len(results))
-    await _send_paginated(message, fmt_key, keyword, results, total, sort_by, file_filter, 0, edit_msg=progress_msg)
+    await _send_paginated(message, fmt_key, keyword, results, total, 0, edit_msg=progress_msg)
 
 
 async def _send_paginated(
@@ -143,8 +114,6 @@ async def _send_paginated(
     keyword: str,
     results: list[str],
     total: int,
-    sort_by: str | None = None,
-    file_filter: str | None = None,
     page: int = 0,
     edit_msg: types.Message | None = None,
 ) -> None:
@@ -153,19 +122,12 @@ async def _send_paginated(
     start = page * PAGE_SIZE
     chunk = results[start : start + PAGE_SIZE]
 
-    suffix = ""
-    if sort_by and sort_by != "none":
-        suffix += f" · sorted: {sort_by}"
-    if file_filter:
-        suffix += f" · file: {file_filter}"
-
-    header = f"📤 Extracted <b>{fmt_key}</b> for: <b>{keyword}</b>{suffix}\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
+    header = f"📤 Extracted <b>{fmt_key}</b> for: <b>{keyword}</b>\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
     body = "\n".join(chunk)
-    footer = "</pre>"
-    full_text = header + body + footer
+    full_text = header + body + "</pre>"
 
     if len(full_text) > MAX_RESPONSE_LENGTH or len(results) > MAX_INLINE_LINES:
-        await _send_as_file(message, fmt_key, keyword, results, total, suffix, edit_msg)
+        await _send_as_file(message, fmt_key, keyword, results, total, edit_msg)
         return
 
     builder = InlineKeyboardBuilder()
@@ -185,15 +147,6 @@ async def _send_paginated(
 @router.callback_query(lambda c: c.data and c.data.startswith("ext_pg:"))
 async def on_extract_page(callback: types.CallbackQuery) -> None:
     page = int(callback.data.split(":")[1])
-    text = callback.message.text or ""
-
-    for cache_prefix in ["mail_pass", "user_pass", "number_pass", "raw", None]:
-        if cache_prefix is None:
-            continue
-        for marker in ("Extracted ", "Results for "):
-            if marker in text:
-                await callback.answer("Cache expired. Please search again.", show_alert=True)
-                return
 
     from src.services.cache import get_redis
     r = get_redis()
@@ -202,37 +155,35 @@ async def on_extract_page(callback: types.CallbackQuery) -> None:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
-    for key in keys:
-        cached = await cache_get(key)
-        if cached is None:
-            continue
-        results, total = cached
-        total_pages = max(1, (len(results) - 1) // PAGE_SIZE + 1)
-        page_clamped = min(max(page, 0), total_pages - 1)
-        start = page_clamped * PAGE_SIZE
-        chunk = results[start : start + PAGE_SIZE]
-
-        header = text[:text.find("<pre>")] if "<pre>" in text else f"📤 Results\n"
-        header_parts = header.split("· Page ")
-        if len(header_parts) > 1:
-            header = header_parts[0].rstrip() + f" · Page {page_clamped + 1}/{total_pages}\n<pre>"
-        else:
-            header += f"Total: {len(results)}/{total} · Page {page_clamped + 1}/{total_pages}\n<pre>"
-
-        body = "\n".join(chunk)
-        full_text = header + body + "</pre>"
-
-        builder = InlineKeyboardBuilder()
-        if page_clamped > 0:
-            builder.button(text="⬅️ Prev", callback_data=f"ext_pg:{page_clamped - 1}")
-        builder.button(text=f"📄 {page_clamped + 1}/{total_pages}", callback_data="ext_noop")
-        if page_clamped < total_pages - 1:
-            builder.button(text="Next ➡️", callback_data=f"ext_pg:{page_clamped + 1}")
-        builder.adjust(3)
-
-        await callback.message.edit_text(full_text, reply_markup=builder.as_markup())
-        await callback.answer()
+    cached = await cache_get(keys[0])
+    if cached is None:
+        await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
+
+    results, total = cached
+    parts = keys[0].split(":")
+    fmt_key = parts[2]
+    keyword = parts[3]
+
+    total_pages = max(1, (len(results) - 1) // PAGE_SIZE + 1)
+    page = min(max(page, 0), total_pages - 1)
+    start = page * PAGE_SIZE
+    chunk = results[start : start + PAGE_SIZE]
+
+    header = f"📤 Extracted <b>{fmt_key}</b> for: <b>{keyword}</b>\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
+    body = "\n".join(chunk)
+    full_text = header + body + "</pre>"
+
+    builder = InlineKeyboardBuilder()
+    if page > 0:
+        builder.button(text="⬅️ Prev", callback_data=f"ext_pg:{page-1}")
+    builder.button(text=f"📄 {page+1}/{total_pages}", callback_data="ext_noop")
+    if page < total_pages - 1:
+        builder.button(text="Next ➡️", callback_data=f"ext_pg:{page+1}")
+    builder.adjust(3)
+
+    await callback.message.edit_text(full_text, reply_markup=builder.as_markup())
+    await callback.answer()
 
 
 async def _send_as_file(
@@ -241,7 +192,6 @@ async def _send_as_file(
     keyword: str,
     results: list[str],
     total: int,
-    suffix: str,
     edit_msg: types.Message | None = None,
 ) -> None:
     filename = f"extract_{fmt_key.replace(':', '_')}_{keyword[:15].replace('/', '_')}_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=6))}.txt"
@@ -250,7 +200,7 @@ async def _send_as_file(
     with open(filepath, "w") as f:
         f.write("\n".join(results))
 
-    caption = f"📤 Extracted <b>{fmt_key}</b> for: <b>{keyword}</b>{suffix}\nTotal: <b>{len(results)}/{total}</b>\n\n💾 Served as file (too large for inline display)."
+    caption = f"📤 Extracted <b>{fmt_key}</b> for: <b>{keyword}</b>\nTotal: <b>{len(results)}/{total}</b>\n\n💾 Served as file (too large for inline display)."
 
     if edit_msg:
         await edit_msg.delete()

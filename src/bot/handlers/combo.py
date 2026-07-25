@@ -8,7 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.database.repos.log import log_usage
 from src.services.cache import check_rate_limit
-from src.services.search import SORT_KEYS, count_estimate, generate_combo_file
+from src.services.search import count_estimate, generate_combo_file
 from src.utils.logger import logger
 
 router = Router()
@@ -22,7 +22,6 @@ FORMATS_MAP = {
     "login_only": "login_only",
     "raw": "raw",
 }
-SORT_OPTIONS = ["none", "url", "login", "password", "domain", "email"]
 
 _options_store: dict[str, dict] = {}
 
@@ -34,21 +33,14 @@ def _opts_key(user_id: int, keyword: str) -> str:
 def _get_opts(user_id: int, keyword: str) -> dict:
     key = _opts_key(user_id, keyword)
     if key not in _options_store:
-        _options_store[key] = {
-            "dedup": False,
-            "lowercase": False,
-            "sort": "none",
-            "delimiter": ":",
-        }
+        _options_store[key] = {"dedup": False, "lowercase": False, "delimiter": ":"}
     return _options_store[key]
 
 
 def _set_opt(user_id: int, keyword: str, option: str, value: str) -> None:
     opts = _get_opts(user_id, keyword)
-    if option == "dedup" or option == "lowercase":
+    if option in ("dedup", "lowercase"):
         opts[option] = value == "1"
-    elif option == "sort":
-        opts["sort"] = value
     elif option == "delimiter":
         opts["delimiter"] = value
     _options_store[_opts_key(user_id, keyword)] = opts
@@ -56,7 +48,6 @@ def _set_opt(user_id: int, keyword: str, option: str, value: str) -> None:
 
 def _opts_text(opts: dict) -> str:
     return (
-        f"Sort: <b>{opts['sort']}</b> | "
         f"Dedup: <b>{'✅' if opts['dedup'] else '❌'}</b> | "
         f"Lower: <b>{'✅' if opts['lowercase'] else '❌'}</b> | "
         f"Delim: <code>{opts['delimiter']}</code>"
@@ -76,10 +67,9 @@ async def cmd_cmb(message: types.Message) -> None:
     keyword = parts[1].strip() if len(parts) > 1 else ""
     if not keyword:
         await message.answer(
-            "⚠️ Usage: <code>/cmb keyword [--sort=KEY] [--dedup] [--lower] [--delim=CHAR]</code>\n\n"
-            "Quick CLI flags also supported:\n"
-            "  <code>/cmb netflix --sort=domain --dedup --lower</code>\n\n"
-            "Example: <code>/cmb netflix</code>",
+            "⚠️ Usage: <code>/cmb keyword [--dedup] [--lower] [--delim=CHAR]</code>\n\n"
+            "Example: <code>/cmb netflix</code>\n"
+            "With flags: <code>/cmb netflix --dedup --lower</code>",
         )
         return
 
@@ -88,7 +78,7 @@ async def cmd_cmb(message: types.Message) -> None:
     _options_store[_opts_key(user_id, keyword_clean)] = opts
 
     est, total = await count_estimate(keyword_clean)
-    est_label = est if est < 50 else f"50+"
+    est_label = est if est < 50 else "50+"
     opts = _get_opts(user_id, keyword_clean)
 
     builder = InlineKeyboardBuilder()
@@ -128,13 +118,6 @@ async def on_options_menu(callback: types.CallbackQuery) -> None:
     )
     builder.adjust(1)
 
-    sort_builder = InlineKeyboardBuilder()
-    current_sort = opts.get("sort", "none")
-    for s in SORT_OPTIONS:
-        prefix = "✅ " if s == current_sort else ""
-        sort_builder.button(text=f"{prefix}{s}", callback_data=f"cmb_opt:{keyword}:sort:{s}")
-    sort_builder.adjust(3)
-
     delim_builder = InlineKeyboardBuilder()
     for d in [":", "|", ";", "-", "/"]:
         current = "✅ " if opts.get("delimiter", ":") == d else ""
@@ -148,7 +131,6 @@ async def on_options_menu(callback: types.CallbackQuery) -> None:
         f"⚙️ <b>Combo Options</b>\n\n{_opts_text(opts)}\n\nToggle settings below:",
         reply_markup=builder.as_markup(),
     )
-    await callback.message.answer("📊 Sort by:", reply_markup=sort_builder.as_markup())
     await callback.message.answer("🔗 Delimiter:", reply_markup=delim_builder.as_markup())
     await callback.message.answer("Done configuring:", reply_markup=b.as_markup())
     await callback.answer()
@@ -210,7 +192,6 @@ async def on_combo_format_chosen(callback: types.CallbackQuery) -> None:
     filepath, count = await generate_combo_file(
         keyword,
         format_type=format_type,
-        sort_by=opts["sort"] if opts["sort"] != "none" else None,
         dedup=opts["dedup"],
         lowercase=opts["lowercase"],
         delimiter=opts["delimiter"],
@@ -227,8 +208,6 @@ async def on_combo_format_chosen(callback: types.CallbackQuery) -> None:
         opt_lines.append("✅ Dedup")
     if opts["lowercase"]:
         opt_lines.append("🔡 Lowercased")
-    if opts["sort"] != "none":
-        opt_lines.append(f"📊 Sorted by: {opts['sort']}")
     if opts["delimiter"] != ":":
         opt_lines.append(f"🔗 Delimiter: {opts['delimiter']}")
     opt_text = " | ".join(opt_lines) if opt_lines else "—"
@@ -258,17 +237,13 @@ def _parse_cli_flags(text: str) -> dict:
     import shlex
     parts = shlex.split(text)
     keyword_parts: list[str] = []
-    opts: dict = {"dedup": False, "lowercase": False, "sort": "none", "delimiter": ":"}
+    opts: dict = {"dedup": False, "lowercase": False, "delimiter": ":"}
 
     for p in parts:
         if p == "--dedup":
             opts["dedup"] = True
         elif p == "--lower":
             opts["lowercase"] = True
-        elif p.startswith("--sort="):
-            val = p.split("=", 1)[1]
-            if val in SORT_KEYS or val == "none":
-                opts["sort"] = val
         elif p.startswith("--delim="):
             val = p.split("=", 1)[1]
             if len(val) == 1:

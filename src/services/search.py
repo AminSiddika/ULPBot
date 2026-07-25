@@ -38,76 +38,16 @@ def _extract_section(line: str, format_type: str) -> str | None:
     return None
 
 
-def _parse_parts(line: str) -> tuple[str, str, str]:
-    parts = line.strip().split(":", 2)
-    if len(parts) >= 3:
-        return parts[0], parts[1], parts[2]
-    if len(parts) == 2:
-        return "", parts[0], parts[1]
-    return "", "", parts[0] if parts else ""
-
-
-def _get_domain(url: str) -> str:
-    dom = url.lower()
-    for prefix in ("https://", "http://"):
-        if dom.startswith(prefix):
-            dom = dom[len(prefix):]
-    dom = dom.split("/")[0]
-    dom = dom.removeprefix("www.")
-    return dom
-
-
-SORT_KEYS = {
-    "url": lambda x: _parse_parts(x)[0].lower(),
-    "login": lambda x: _parse_parts(x)[1].lower(),
-    "password": lambda x: _parse_parts(x)[2].lower(),
-    "domain": lambda x: _get_domain(_parse_parts(x)[0]),
-    "email": lambda x: (
-        _parse_parts(x)[1].split("@", 1)[1].lower()
-        if "@" in _parse_parts(x)[1]
-        else _parse_parts(x)[1].lower()
-    ),
-}
-
-
-def sort_results(results: list[str], sort_by: str) -> list[str]:
-    key_fn = SORT_KEYS.get(sort_by)
-    if key_fn is None:
-        return results
-    return sorted(results, key=key_fn)
-
-
-def dedup_results(results: list[str]) -> list[str]:
-    seen: set[str] = set()
-    unique: list[str] = []
-    for r in results:
-        h = r.strip().lower()
-        if h not in seen:
-            seen.add(h)
-            unique.append(r)
-    return unique
-
-
-def lowercase_results(results: list[str]) -> list[str]:
-    return [r.lower() for r in results]
-
-
 async def search_ulp(
     keyword: str,
     max_results: int = 1000,
     format_type: str | None = None,
-    sort_by: str | None = None,
-    file_filter: str | None = None,
 ) -> tuple[list[str], int]:
     data_path = Path(settings.data_dir)
     if not data_path.exists() or not any(data_path.glob("*.txt")):
         return [], 0
 
-    if file_filter:
-        db_files = [data_path / file_filter] if (data_path / file_filter).exists() else []
-    else:
-        db_files = sorted(data_path.glob("*.txt"))
-
+    db_files = sorted(data_path.glob("*.txt"))
     results: list[str] = []
     total_found = 0
 
@@ -151,19 +91,13 @@ async def search_ulp(
             logger.error("ripgrep (rg) not found. Install it with: apt install ripgrep")
             return [], -1
 
-    results = results[:max_results]
-
-    if sort_by and sort_by != "none":
-        results = sort_results(results, sort_by)
-
-    return results, total_found
+    return results[:max_results], total_found
 
 
 async def generate_combo_file(
     keyword: str,
     format_type: str = "raw",
     max_results: int = 50000,
-    sort_by: str | None = None,
     dedup: bool = False,
     lowercase: bool = False,
     delimiter: str = ":",
@@ -172,7 +106,6 @@ async def generate_combo_file(
         keyword,
         max_results=max_results,
         format_type=format_type if format_type not in ("password_only", "login_only") else "raw",
-        sort_by=sort_by,
     )
 
     if format_type in ("password_only", "login_only"):
@@ -192,9 +125,17 @@ async def generate_combo_file(
             results = processed
 
     if dedup:
-        results = dedup_results(results)
+        seen: set[str] = set()
+        unique = []
+        for r in results:
+            h = r.strip().lower()
+            if h not in seen:
+                seen.add(h)
+                unique.append(r)
+        results = unique
+
     if lowercase:
-        results = lowercase_results(results)
+        results = [r.lower() for r in results]
 
     filename = f"combo_{keyword[:20].replace('/', '_')}_{_random_id()}.txt"
     filepath = Path(settings.downloads_dir) / filename

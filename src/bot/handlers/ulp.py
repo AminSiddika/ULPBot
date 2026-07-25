@@ -1,9 +1,6 @@
 import asyncio
-import json
 import os
 import random
-import shlex
-import time
 
 from aiogram import Router, types
 from aiogram.filters import Command
@@ -16,11 +13,8 @@ from src.services.cache import (
     cache_set,
     check_cooldown,
     check_rate_limit,
-    get_redis,
-    store_search_page,
 )
-from src.services.search import SORT_KEYS, search_ulp
-from src.utils.logger import logger
+from src.services.search import search_ulp
 
 router = Router()
 
@@ -30,45 +24,6 @@ MAX_INLINE_LINES = 50
 PAGE_SIZE = 30
 
 SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-USAGE = (
-    "⚠️ Usage: <code>/ulp keyword [--sort=KEY] [--file=name.txt]</code>\n\n"
-    "Sort keys: url, login, password, domain, email, none\n"
-    "Example: <code>/ulp outlook --sort=domain --file=db1.txt</code>"
-)
-
-
-def _parse_args(text: str) -> tuple[str, str | None, str | None]:
-    keyword_parts: list[str] = []
-    sort_by: str | None = None
-    file_filter: str | None = None
-    raw_parts = shlex.split(text)[1:] if len(shlex.split(text)) > 1 else []
-
-    for part in raw_parts:
-        if part.startswith("--sort="):
-            val = part.split("=", 1)[1]
-            if val in SORT_KEYS or val == "none":
-                sort_by = val
-        elif part.startswith("--file="):
-            file_filter = part.split("=", 1)[1]
-        else:
-            keyword_parts.append(part)
-
-    return " ".join(keyword_parts), sort_by, file_filter
-
-
-async def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
-    async def spin():
-        i = 0
-        while True:
-            try:
-                await message.edit_text(f"{SPINNER[i % len(SPINNER)]} {text}")
-                i += 1
-                await asyncio.sleep(0.8)
-            except Exception:
-                break
-
-    return asyncio.create_task(spin())
 
 
 @router.message(Command("ulp"))
@@ -80,32 +35,29 @@ async def cmd_ulp(message: types.Message) -> None:
         await message.answer("⏳ Rate limit exceeded. Please wait a moment.")
         return
 
-    keyword, sort_by, file_filter = _parse_args(message.text)
+    keyword = message.text.split(" ", 1)[-1].strip() if len(message.text.split(" ")) > 1 else ""
     if not keyword:
-        await message.answer(USAGE)
+        await message.answer("⚠️ Usage: <code>/ulp keyword</code>\n\nExample: <code>/ulp outlook</code>")
         return
 
     on_cooldown = await check_cooldown(user_id, keyword)
     if on_cooldown:
-        await message.answer(f"⏳ You just searched <code>{keyword}</code>. Wait 30s before repeating the same keyword.")
+        await message.answer(f"⏳ You just searched <code>{keyword}</code>. Wait 30s before repeating.")
         return
 
-    cache_key = f"search:ulp:{keyword.lower()}:{sort_by or 'none'}:{file_filter or 'all'}:{MAX_RESULTS}"
+    cache_key = f"search:ulp:{keyword.lower()}:{MAX_RESULTS}"
 
     cached = await cache_get(cache_key)
     if cached is not None:
         results, total = cached
-        await _send_paginated(message, keyword, results, total, sort_by, file_filter, 0)
+        await _send_paginated(message, keyword, results, total, 0)
         await log_usage(user_id, "ulp", keyword, len(results))
         return
 
-    spinner_label = f"Searching: <b>{keyword}</b>" + (f" (sorted: {sort_by})" if sort_by and sort_by != "none" else "") + (f" [file: {file_filter}]" if file_filter else "")
-    progress_msg = await message.answer(f"🔍 {spinner_label}...")
-    task = await _start_spinner(progress_msg, spinner_label)
+    progress_msg = await message.answer(f"⠋ Searching: <b>{keyword}</b>...")
+    task = _start_spinner(progress_msg, f"Searching: <b>{keyword}</b>")
 
-    results, total = await search_ulp(
-        keyword, max_results=MAX_RESULTS, sort_by=sort_by, file_filter=file_filter
-    )
+    results, total = await search_ulp(keyword, max_results=MAX_RESULTS)
 
     task.cancel()
     try:
@@ -124,7 +76,20 @@ async def cmd_ulp(message: types.Message) -> None:
 
     await cache_set(cache_key, (results, total), ttl=300)
     await log_usage(user_id, "ulp", keyword, len(results))
-    await _send_paginated(message, keyword, results, total, sort_by, file_filter, 0, edit_msg=progress_msg)
+    await _send_paginated(message, keyword, results, total, 0, edit_msg=progress_msg)
+
+
+def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
+    async def spin():
+        i = 0
+        while True:
+            try:
+                await message.edit_text(f"{SPINNER[i % len(SPINNER)]} {text}")
+                i += 1
+                await asyncio.sleep(0.8)
+            except Exception:
+                break
+    return asyncio.create_task(spin())
 
 
 async def _send_paginated(
@@ -132,8 +97,6 @@ async def _send_paginated(
     keyword: str,
     results: list[str],
     total: int,
-    sort_by: str | None = None,
-    file_filter: str | None = None,
     page: int = 0,
     edit_msg: types.Message | None = None,
 ) -> None:
@@ -142,20 +105,12 @@ async def _send_paginated(
     start = page * PAGE_SIZE
     chunk = results[start : start + PAGE_SIZE]
 
-    suffix = ""
-    if sort_by and sort_by != "none":
-        suffix += f" · sorted: {sort_by}"
-    if file_filter:
-        suffix += f" · file: {file_filter}"
-
-    header = f"🔍 Results for: <b>{keyword}</b>{suffix}\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
+    header = f"🔍 Results for: <b>{keyword}</b>\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
     body = "\n".join(chunk)
-    footer = "</pre>"
-
-    full_text = header + body + footer
+    full_text = header + body + "</pre>"
 
     if len(full_text) > MAX_RESPONSE_LENGTH or len(results) > MAX_INLINE_LINES:
-        await _send_as_file(message, keyword, results, total, "ulp", suffix, edit_msg)
+        await _send_as_file(message, keyword, results, total, edit_msg)
         return
 
     builder = InlineKeyboardBuilder()
@@ -175,50 +130,30 @@ async def _send_paginated(
 @router.callback_query(lambda c: c.data and c.data.startswith("ulp_pg:"))
 async def on_ulp_page(callback: types.CallbackQuery) -> None:
     page = int(callback.data.split(":")[1])
-    text = callback.message.text or callback.message.caption or ""
 
-    keyword_match = None
-    for marker in ("Results for: <b>", "Results for: "):
-        if marker in text:
-            start_idx = text.index(marker) + len(marker)
-            end_idx = text.index("</b>", start_idx) if "</b>" in text[start_idx:] else text.index("\n", start_idx)
-            keyword_match = text[start_idx:end_idx].strip()
-            break
-
-    if keyword_match is None:
-        await callback.answer("Cache expired. Please search again.", show_alert=True)
-        return
-
-    keyword = keyword_match
-    cache_key = None
+    from src.services.cache import get_redis
     r = get_redis()
-    keys = await r.keys(f"search:ulp:{keyword.lower()}:*")
-    if keys:
-        cache_key = keys[0]
-
-    if cache_key is None:
+    keys = await r.keys("search:ulp:*")
+    if not keys:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
-    cached = await cache_get(cache_key)
+    cached = await cache_get(keys[0])
     if cached is None:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
     results, total = cached
+    keyword = keys[0].split(":")[2]
+
     total_pages = max(1, (len(results) - 1) // PAGE_SIZE + 1)
     page = min(max(page, 0), total_pages - 1)
     start = page * PAGE_SIZE
     chunk = results[start : start + PAGE_SIZE]
 
-    suffix = ""
-    if "· sorted:" in text:
-        suffix = " · sorted:" + text.split("· sorted:")[1].split("·")[0].strip() if "· sorted:" in text else ""
-
-    header = f"🔍 Results for: <b>{keyword}</b>{suffix}\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
+    header = f"🔍 Results for: <b>{keyword}</b>\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
     body = "\n".join(chunk)
-    footer = "</pre>"
-    full_text = header + body + footer
+    full_text = header + body + "</pre>"
 
     builder = InlineKeyboardBuilder()
     if page > 0:
@@ -237,17 +172,15 @@ async def _send_as_file(
     keyword: str,
     results: list[str],
     total: int,
-    prefix: str,
-    suffix: str,
     edit_msg: types.Message | None = None,
 ) -> None:
-    filename = f"{prefix}_{keyword[:20].replace('/', '_')}_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=6))}.txt"
+    filename = f"ulp_{keyword[:20].replace('/', '_')}_{''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=6))}.txt"
     filepath = f"/tmp/{filename}"
 
     with open(filepath, "w") as f:
         f.write("\n".join(results))
 
-    caption = f"🔍 Results for: <b>{keyword}</b>{suffix}\nTotal: <b>{len(results)}/{total}</b> records\n\n💾 Served as file (too large for inline display)."
+    caption = f"🔍 Results for: <b>{keyword}</b>\nTotal: <b>{len(results)}/{total}</b> records\n\n💾 Served as file (too large for inline display)."
 
     if edit_msg:
         await edit_msg.delete()
