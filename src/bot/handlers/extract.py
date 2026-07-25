@@ -147,23 +147,25 @@ async def _send_paginated(
 @router.callback_query(lambda c: c.data and c.data.startswith("ext_pg:"))
 async def on_extract_page(callback: types.CallbackQuery) -> None:
     page = int(callback.data.split(":")[1])
+    text = callback.message.text or ""
 
-    from src.services.cache import get_redis
-    r = get_redis()
-    keys = await r.keys("search:extract:*")
-    if not keys:
+    keyword = _extract_keyword_from_text(text)
+    if keyword is None:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
-    cached = await cache_get(keys[0])
+    fmt_key = _extract_fmt_from_text(text)
+    if fmt_key is None:
+        await callback.answer("Cache expired. Please search again.", show_alert=True)
+        return
+
+    cache_key = f"search:extract:{fmt_key}:{keyword.lower()}:{MAX_RESULTS}"
+    cached = await cache_get(cache_key)
     if cached is None:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
     results, total = cached
-    parts = keys[0].split(":")
-    fmt_key = parts[2]
-    keyword = parts[3]
 
     total_pages = max(1, (len(results) - 1) // PAGE_SIZE + 1)
     page = min(max(page, 0), total_pages - 1)
@@ -211,3 +213,29 @@ async def _send_as_file(
         os.remove(filepath)
     except OSError:
         pass
+
+
+def _extract_keyword_from_text(text: str) -> str | None:
+    if "<b>" not in text or "</b>" not in text:
+        return None
+    parts = text.split("<b>")
+    if len(parts) < 3:
+        return None
+    kw_part = parts[2]
+    end = kw_part.index("</b>") if "</b>" in kw_part else None
+    if end is None:
+        return None
+    return kw_part[:end].split("\n")[0].strip()
+
+
+def _extract_fmt_from_text(text: str) -> str | None:
+    if "<b>" not in text or "</b>" not in text:
+        return None
+    parts = text.split("<b>")
+    if len(parts) < 2:
+        return None
+    fmt_part = parts[1]
+    end = fmt_part.index("</b>") if "</b>" in fmt_part else None
+    if end is None:
+        return None
+    return fmt_part[:end].strip()

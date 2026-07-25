@@ -130,21 +130,20 @@ async def _send_paginated(
 @router.callback_query(lambda c: c.data and c.data.startswith("ulp_pg:"))
 async def on_ulp_page(callback: types.CallbackQuery) -> None:
     page = int(callback.data.split(":")[1])
+    text = callback.message.text or ""
 
-    from src.services.cache import get_redis
-    r = get_redis()
-    keys = await r.keys("search:ulp:*")
-    if not keys:
+    keyword = _extract_keyword_from_text(text)
+    if keyword is None:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
-    cached = await cache_get(keys[0])
+    cache_key = f"search:ulp:{keyword.lower()}:{MAX_RESULTS}"
+    cached = await cache_get(cache_key)
     if cached is None:
         await callback.answer("Cache expired. Please search again.", show_alert=True)
         return
 
     results, total = cached
-    keyword = keys[0].split(":")[2]
 
     total_pages = max(1, (len(results) - 1) // PAGE_SIZE + 1)
     page = min(max(page, 0), total_pages - 1)
@@ -191,3 +190,12 @@ async def _send_as_file(
         os.remove(filepath)
     except OSError:
         pass
+
+
+def _extract_keyword_from_text(text: str) -> str | None:
+    if "<b>" not in text or "</b>" not in text:
+        return None
+    start = text.index("<b>") + 3
+    end = text.index("</b>", start)
+    raw = text[start:end]
+    return raw.split("\n")[0].strip()

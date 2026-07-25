@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 
 from aiogram import Router, types
@@ -24,6 +25,29 @@ FORMATS_MAP = {
 }
 
 _options_store: dict[str, dict] = {}
+_options_timestamps: dict[str, float] = {}
+OPTIONS_TTL = 600
+
+
+def _opts_key(user_id: int, keyword: str) -> str:
+    return f"{user_id}:{keyword.lower()}"
+
+
+def _get_opts(user_id: int, keyword: str) -> dict:
+    key = _opts_key(user_id, keyword)
+    _cleanup_expired()
+    if key not in _options_store:
+        _options_store[key] = {"dedup": False, "lowercase": False, "delimiter": ":"}
+        _options_timestamps[key] = time.monotonic()
+    return _options_store[key]
+
+
+def _cleanup_expired() -> None:
+    now = time.monotonic()
+    stale = [k for k, ts in _options_timestamps.items() if now - ts > OPTIONS_TTL]
+    for k in stale:
+        _options_store.pop(k, None)
+        _options_timestamps.pop(k, None)
 
 
 def _opts_key(user_id: int, keyword: str) -> str:
@@ -230,7 +254,9 @@ async def on_combo_format_chosen(callback: types.CallbackQuery) -> None:
     except OSError:
         logger.warning(f"Failed to remove temp file: {filepath}")
 
-    del _options_store[_opts_key(callback.from_user.id, keyword)]
+    k = _opts_key(callback.from_user.id, keyword)
+    _options_store.pop(k, None)
+    _options_timestamps.pop(k, None)
 
 
 def _parse_cli_flags(text: str) -> dict:

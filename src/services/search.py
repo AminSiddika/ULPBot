@@ -43,6 +43,10 @@ async def search_ulp(
     max_results: int = 1000,
     format_type: str | None = None,
 ) -> tuple[list[str], int]:
+    keyword = keyword.strip().replace("\x00", "")[:256]
+    if not keyword:
+        return [], 0
+
     data_path = Path(settings.data_dir)
     if not data_path.exists() or not any(data_path.glob("*.txt")):
         return [], 0
