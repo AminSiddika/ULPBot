@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ulp-bot"
+version = "2.0.0"
+description = "Professional ULP Telegram Bot — Search, extract, and generate combos from ULP databases"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "aiogram>=3.15,<4",
+    "pydantic-settings>=2.6",
+    "motor>=3.7,<4",
+    "redis>=5.2",
+    "redis[hiredis]>=5.2",
+    "loguru>=0.7",
+    "aiofiles>=24.1",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "apscheduler>=3.11",
+    "sentry-sdk>=2.20",
+    "prometheus-client>=0.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6",
+    "ruff>=0.8",
+    "mypy>=1.14",
+    "pre-commit>=4",
+    "httpx>=0.28",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "C4"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --cov=src --cov-report=term-missing"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
