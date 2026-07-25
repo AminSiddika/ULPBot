@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from src.config import settings
 from src.database.repos.log import log_usage
 from src.services.cache import cache_get, cache_set, check_cooldown, check_rate_limit
 from src.services.search import search_ulp
@@ -46,10 +47,13 @@ def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
 async def cmd_extract(message: types.Message) -> None:
     user_id = message.from_user.id
 
-    limited = await check_rate_limit(user_id, limit=15, window=60)
-    if limited:
-        await message.answer("⏳ Rate limit exceeded. Please wait a moment.")
-        return
+    is_admin = user_id == settings.owner_id or user_id in settings.admin_ids_set
+
+    if not is_admin:
+        limited = await check_rate_limit(user_id, limit=15, window=60)
+        if limited:
+            await message.answer("⏳ Rate limit exceeded. Please wait a moment.")
+            return
 
     parts = message.text.split(" ", 2)
     if len(parts) < 3:
@@ -68,10 +72,11 @@ async def cmd_extract(message: types.Message) -> None:
         return
 
     full_key = f"{fmt_key}:{keyword}"
-    on_cooldown = await check_cooldown(user_id, full_key)
-    if on_cooldown:
-        await message.answer(f"⏳ You just searched <code>{fmt_key} {keyword}</code>. Wait 30s before repeating.")
-        return
+    if not is_admin:
+        on_cooldown = await check_cooldown(user_id, full_key)
+        if on_cooldown:
+            await message.answer(f"⏳ You just searched <code>{fmt_key} {keyword}</code>. Wait 30s before repeating.")
+            return
 
     format_type = FORMATS[fmt_key]
     cache_key = f"search:extract:{fmt_key}:{keyword.lower()}:{MAX_RESULTS}"

@@ -144,8 +144,18 @@ async def generate_combo_file(
     filename = f"combo_{keyword[:20].replace('/', '_')}_{_random_id()}.txt"
     filepath = Path(settings.downloads_dir) / filename
 
+    lines: list[str] = []
+    lines.append(f"# ULP Bot v3.3 — Combo File")
+    lines.append(f"# Keyword: {keyword}")
+    lines.append(f"# Format: {format_type}")
+    lines.append(f"# Dedup: {dedup} | Lowercase: {lowercase} | Delimiter: {delimiter}")
+    lines.append(f"# Generated: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append(f"# Results: {len(results)}")
+    lines.append("")
+    lines.extend(results)
+
     async with aiofiles.open(filepath, "w") as f:
-        await f.write("\n".join(results))
+        await f.write("\n".join(lines))
 
     return str(filepath), len(results)
 

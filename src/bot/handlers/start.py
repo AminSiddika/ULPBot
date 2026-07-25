@@ -1,15 +1,48 @@
 from aiogram import Router, types
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.database.repos.log import log_usage
-from src.services.cache import check_rate_limit
+from src.services.cache import cache_get
 from src.services.search import search_ulp
-from src.utils.logger import logger
 
 router = Router()
 
 MAX_RESULTS = 100
+
+VERSION = "3.3"
+
+
+@router.message(Command("ping"))
+async def cmd_ping(message: types.Message) -> None:
+    import time
+    t0 = time.monotonic()
+    db_ok = False
+    redis_ok = False
+
+    try:
+        from src.database.engine import get_db
+        await get_db().command("ping")
+        db_ok = True
+    except Exception:
+        pass
+
+    try:
+        from src.services.cache import get_redis
+        await get_redis().ping()
+        redis_ok = True
+    except Exception:
+        pass
+
+    elapsed = (time.monotonic() - t0) * 1000
+
+    await message.answer(
+        f"🏓 <b>Pong!</b>\n"
+        f"Version: <b>{VERSION}</b>\n"
+        f"Latency: <b>{elapsed:.0f}ms</b>\n"
+        f"MongoDB: {'✅' if db_ok else '❌'}\n"
+        f"Redis: {'✅' if redis_ok else '❌'}"
+    )
 
 
 @router.message(CommandStart())
