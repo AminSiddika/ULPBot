@@ -97,15 +97,21 @@ async def search_ulp(
     max_results: int = 1000,
     format_type: str | None = None,
     sort_by: str | None = None,
+    file_filter: str | None = None,
 ) -> tuple[list[str], int]:
     data_path = Path(settings.data_dir)
     if not data_path.exists() or not any(data_path.glob("*.txt")):
         return [], 0
 
+    if file_filter:
+        db_files = [data_path / file_filter] if (data_path / file_filter).exists() else []
+    else:
+        db_files = sorted(data_path.glob("*.txt"))
+
     results: list[str] = []
     total_found = 0
 
-    for db_file in sorted(data_path.glob("*.txt")):
+    for db_file in db_files:
         if total_found >= max_results:
             break
         try:

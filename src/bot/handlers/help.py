@@ -12,8 +12,8 @@ async def cmd_help(message: types.Message) -> None:
         "/start — Welcome message\n"
         "/help — This help message\n"
         "/cmds — List all commands\n"
-        "/ulp <b>[keyword] [--sort=KEY]</b> — Search ULP DB\n"
-        "/extract <b>[format] [keyword] [--sort=KEY]</b> — Extract format\n"
+        "/ulp <b>[keyword] [--sort=KEY] [--file=name.txt]</b> — Search ULP DB\n"
+        "/extract <b>[format] [keyword] [--sort=KEY] [--file=name.txt]</b> — Extract format\n"
         "/cmb <b>[keyword] [options]</b> — Generate combo file\n"
         "/history <b>[cmd]</b> — View search history\n\n"
         "<b>━━ Admin Commands ━━</b>\n"
@@ -21,6 +21,9 @@ async def cmd_help(message: types.Message) -> None:
         "/files — Browse & manage database files\n"
         "/clean — DB stats & cleanup tools\n"
         "/stats — Usage statistics\n"
+        "/validate — Validate DB lines for errors\n"
+        "/merge — Merge all DBs into one deduped file\n"
+        "/export — Export all DBs as ZIP\n"
         "/broadcast — Send message to all users\n"
         "/ban <b>[id]</b> — Ban a user\n"
         "/unban <b>[id]</b> — Unban a user\n"
@@ -39,5 +42,6 @@ async def cmd_help(message: types.Message) -> None:
         "/ulp outlook --sort=domain\n"
         "/extract mail:pass gmail.com --sort=email\n"
         "/cmb netflix --sort=domain --dedup --lower\n"
-        "/history ulp",
+        "/ulp outlook --file=db1.txt\n"
+        "t.me/bot?start=outlook  ← deep link auto-search",
     )

@@ -27,6 +27,29 @@ async def on_startup(bot: Bot) -> None:
 
     setup_scheduler()
 
+    from aiogram.types import BotCommand, BotCommandScopeDefault
+
+    commands = [
+        BotCommand(command="start", description="Welcome message"),
+        BotCommand(command="help", description="Show all commands"),
+        BotCommand(command="cmds", description="List commands"),
+        BotCommand(command="ulp", description="Search ULP database"),
+        BotCommand(command="extract", description="Extract specific format"),
+        BotCommand(command="cmb", description="Generate combo file"),
+        BotCommand(command="history", description="Search history"),
+        BotCommand(command="add", description="Upload DB file (admin)"),
+        BotCommand(command="files", description="Browse DB files (admin)"),
+        BotCommand(command="clean", description="DB stats & cleanup (admin)"),
+        BotCommand(command="stats", description="Usage stats (admin)"),
+        BotCommand(command="validate", description="Validate DB files (admin)"),
+        BotCommand(command="merge", description="Merge all DB files (admin)"),
+        BotCommand(command="export", description="Export all DB files (admin)"),
+        BotCommand(command="broadcast", description="Message all users (admin)"),
+        BotCommand(command="users", description="List users (admin)"),
+    ]
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    logger.info("Bot commands menu registered")
+
     me = await bot.get_me()
     logger.info(f"Bot @{me.username} is ready")
 

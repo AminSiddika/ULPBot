@@ -3,6 +3,7 @@ from pathlib import Path
 
 from aiogram import Router, types
 from aiogram.filters import Command, CommandObject
+from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.config import settings
@@ -259,6 +260,100 @@ async def on_clean_list(callback: types.CallbackQuery) -> None:
 
     await callback.message.answer("\n".join(lines[:50]))
     await callback.answer()
+
+
+@router.message(Command("merge"))
+async def cmd_merge(message: types.Message) -> None:
+    if not await _check_admin(message):
+        return
+
+    data_path = Path(settings.data_dir)
+    files = sorted(data_path.glob("*.txt"))
+
+    if len(files) < 2:
+        await message.answer("⚠️ Need at least 2 database files to merge.")
+        return
+
+    progress_msg = await message.answer(f"🔀 Merging <b>{len(files)}</b> files...")
+
+    import time
+    seen: set[str] = set()
+    total_lines = 0
+    unique_lines = 0
+
+    master_path = data_path / f"merged_{int(time.time())}.txt"
+
+    with open(master_path, "w") as out:
+        for fp in files:
+            with open(fp, "r", errors="replace") as fh:
+                for line in fh:
+                    total_lines += 1
+                    stripped = line.strip().lower()
+                    if stripped and stripped not in seen:
+                        seen.add(stripped)
+                        out.write(line.strip() + "\n")
+                        unique_lines += 1
+
+    size = master_path.stat().st_size
+    dupes = total_lines - unique_lines
+
+    await progress_msg.edit_text(
+        f"✅ <b>Merge Complete</b>\n\n"
+        f"Files merged: <b>{len(files)}</b>\n"
+        f"Total lines: <b>{total_lines}</b>\n"
+        f"Unique lines: <b>{unique_lines}</b>\n"
+        f"Duplicates removed: <b>{dupes}</b>\n"
+        f"Output: <code>data/{master_path.name}</code>\n"
+        f"Size: <b>{_format_size(size)}</b>\n\n"
+        f"ℹ️ Search cache cleared."
+    )
+
+    from src.services.cache import cache_delete
+    await cache_delete("search:*")
+
+
+@router.message(Command("export"))
+async def cmd_export(message: types.Message) -> None:
+    if not await _check_admin(message):
+        return
+
+    import zipfile
+
+    data_path = Path(settings.data_dir)
+    files = sorted(data_path.glob("*.txt"))
+
+    if not files:
+        await message.answer("📭 No database files to export.")
+        return
+
+    progress_msg = await message.answer(f"📦 Packaging <b>{len(files)}</b> files...")
+
+    zip_path = Path("/tmp/ulpbot_export.zip")
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fp in files:
+            zf.write(fp, fp.name)
+
+    zip_size = zip_path.stat().st_size
+
+    if zip_size > 50 * 1024 * 1024:
+        await progress_msg.edit_text(f"❌ Export too large ({_format_size(zip_size)}). Max: 50 MB. Consider /merge first.")
+        zip_path.unlink()
+        return
+
+    await message.answer_document(
+        FSInputFile(str(zip_path)),
+        caption=(
+            f"📦 <b>Database Export</b>\n"
+            f"Files: <b>{len(files)}</b>\n"
+            f"Total size: <b>{_format_size(sum(f.stat().st_size for f in files))}</b>\n"
+            f"Compressed: <b>{_format_size(zip_size)}</b>"
+        ),
+    )
+
+    zip_path.unlink()
+    await progress_msg.delete()
+    logger.info(f"Admin {message.from_user.id} exported {len(files)} DB files")
 
 
 @router.message(Command("stats"))

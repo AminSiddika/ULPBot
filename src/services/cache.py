@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -55,3 +57,22 @@ async def check_rate_limit(user_id: int, limit: int = 10, window: int = 60) -> b
     if current == 1:
         await r.expire(key, window)
     return current > limit
+
+
+async def check_cooldown(user_id: int, keyword: str, cooldown: int = 30) -> bool:
+    r = get_redis()
+    key = f"cooldown:{user_id}:{keyword.lower()}"
+    exists = await r.exists(key)
+    if exists:
+        return True
+    await r.set(key, "1", ex=cooldown)
+    return False
+
+
+async def store_search_page(user_id: int, chat_id: int, page_data: dict, ttl: int = 600) -> str:
+    import uuid
+    r = get_redis()
+    key = f"page:{user_id}:{uuid.uuid4().hex[:8]}"
+    page_data["chat_id"] = chat_id
+    await r.set(key, json.dumps(page_data), ex=ttl)
+    return key
