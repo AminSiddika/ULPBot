@@ -3,6 +3,7 @@ from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.database.repos.log import log_usage
+from src.database.repos.user import FREE_SEARCH_LIMIT, get_user, is_premium
 from src.services.cache import cache_get
 from src.services.search import search_ulp
 
@@ -10,7 +11,7 @@ router = Router()
 
 MAX_RESULTS = 100
 
-VERSION = "3.3"
+VERSION = "4.1"
 
 
 @router.message(Command("ping"))
@@ -56,6 +57,9 @@ async def cmd_start(message: types.Message, command: CommandObject) -> None:
     builder = InlineKeyboardBuilder()
     builder.button(text="📢 Channel", url="https://t.me/ulpbotchannel")
 
+    premium = await is_premium(message.from_user.id)
+    status_line = "⭐ Premium · Unlimited" if premium else f"🔍 Free · {FREE_SEARCH_LIMIT} searches"
+
     kb = types.ReplyKeyboardMarkup(
         keyboard=[
             [types.KeyboardButton(text="🔍 /ulp"), types.KeyboardButton(text="📤 /extract"), types.KeyboardButton(text="📦 /cmb")],
@@ -65,7 +69,7 @@ async def cmd_start(message: types.Message, command: CommandObject) -> None:
     )
 
     await message.answer(
-        "🤖 <b>ULP Bot v4</b>\n\n"
+        f"🤖 <b>ULP Bot v{VERSION}</b> · {status_line}\n\n"
         "Search ULP databases, extract combos, and generate custom combo files.\n\n"
         "Commands:\n"
         "/cmds — List all commands\n"

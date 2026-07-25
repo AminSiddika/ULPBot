@@ -13,7 +13,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from src.config import settings
 from src.database.engine import get_db
 from src.database.repos.log import get_stats
-from src.database.repos.user import get_or_create_user, is_admin
+from src.database.repos.user import (
+    get_or_create_user,
+    is_admin,
+    set_premium,
+)
 from src.utils.logger import logger
 
 router = Router()
@@ -524,6 +528,113 @@ async def cmd_reset(message: types.Message, command: CommandObject) -> None:
         logger.info(f"Admin {message.from_user.id} reset search count for user {target_id}")
     else:
         await message.answer(f"⚠️ User <code>{target_id}</code> not found.")
+
+
+@router.message(Command("setpremium"))
+async def cmd_setpremium(message: types.Message, command: CommandObject) -> None:
+    if not await _check_admin(message):
+        return
+
+    args = (command.args or "").strip().split()
+    if len(args) < 2:
+        await message.answer("⚠️ Usage: <code>/setpremium user_id duration</code>\n\nExample: <code>/setpremium 123456 7d</code>")
+        return
+
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await message.answer("❌ Invalid user ID.")
+        return
+
+    duration_str = args[1]
+    duration_seconds = _parse_duration(duration_str)
+    if duration_seconds is None:
+        await message.answer(f"❌ Invalid duration: <code>{duration_str}</code>\nUse: 30min, 7d, 1m, 1y")
+        return
+
+    from datetime import timedelta
+    await set_premium(target_id, timedelta(seconds=duration_seconds))
+
+    label = _format_duration(duration_seconds)
+    await message.answer(f"⭐ Premium granted to <code>{target_id}</code> for <b>{label}</b>.")
+    logger.info(f"Admin {message.from_user.id} set premium for {target_id}: {label}")
+
+
+@router.message(Command("unpremium"))
+async def cmd_unpremium(message: types.Message, command: CommandObject) -> None:
+    if not await _check_admin(message):
+        return
+
+    target_id = None
+    if command.args and command.args.strip().isdigit():
+        target_id = int(command.args.strip())
+    elif message.reply_to_message and message.reply_to_message.from_user:
+        target_id = message.reply_to_message.from_user.id
+
+    if target_id is None:
+        await message.answer("⚠️ Usage: <code>/unpremium user_id</code> or reply to user.")
+        return
+
+    db = get_db()
+    await db.users.update_one(
+        {"user_id": target_id},
+        {"$set": {"is_premium": False, "premium_expiry": None, "updated_at": datetime.now(timezone.utc)}},
+    )
+    await message.answer(f"⬇️ Premium removed from <code>{target_id}</code>.")
+    logger.info(f"Admin {message.from_user.id} removed premium from {target_id}")
+
+
+@router.message(Command("delkey"))
+async def cmd_delkey(message: types.Message, command: CommandObject) -> None:
+    if not await _check_admin(message):
+        return
+
+    key = (command.args or "").strip().upper() if command.args else ""
+    if not key:
+        await message.answer("⚠️ Usage: <code>/delkey ULP-XXXX-XXXX-XXXX-XXXX</code>")
+        return
+
+    db = get_db()
+    key_doc = await db.premium_keys.find_one({"key": key})
+    if key_doc is None:
+        await message.answer(f"❌ Key not found: <code>{key}</code>")
+        return
+
+    if key_doc.get("used"):
+        await message.answer(f"⚠️ Key <code>{key}</code> is already used. Cannot delete.")
+        return
+
+    await db.premium_keys.delete_one({"key": key})
+    await message.answer(f"🗑 Key deleted: <code>{key}</code>")
+    logger.info(f"Admin {message.from_user.id} deleted key {key}")
+
+
+@router.message(Command("notify"))
+async def cmd_notify(message: types.Message, command: CommandObject) -> None:
+    if not await _check_admin(message):
+        return
+
+    args = (command.args or "").strip().split(" ", 1)
+    if len(args) < 2:
+        await message.answer("⚠️ Usage: <code>/notify user_id message</code>")
+        return
+
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await message.answer("❌ Invalid user ID.")
+        return
+
+    msg_text = args[1]
+    try:
+        await message.bot.send_message(
+            target_id,
+            f"📢 <b>Message from admin:</b>\n\n{msg_text}",
+        )
+        await message.answer(f"✅ Message sent to <code>{target_id}</code>.")
+        logger.info(f"Admin {message.from_user.id} notified user {target_id}")
+    except Exception as e:
+        await message.answer(f"❌ Failed to send: {e}")
 
 
 @router.message(Command("stats"))
