@@ -7,14 +7,9 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from src.config import settings
 from src.database.repos.log import log_usage
-from src.services.cache import (
-    cache_get,
-    cache_set,
-    check_cooldown,
-    check_rate_limit,
-)
+from src.database.repos.user import FREE_SEARCH_LIMIT, increment_search_count, is_premium
+from src.services.cache import cache_get, cache_set
 from src.services.search import search_ulp
 
 router = Router()
@@ -31,24 +26,21 @@ SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 async def cmd_ulp(message: types.Message) -> None:
     user_id = message.from_user.id
 
-    is_admin = user_id == settings.owner_id or user_id in settings.admin_ids_set
-
-    if not is_admin:
-        limited = await check_rate_limit(user_id, limit=15, window=60)
-        if limited:
-            await message.answer("⏳ Rate limit exceeded. Please wait a moment.")
+    if not await is_premium(user_id):
+        count, ok = await increment_search_count(user_id)
+        if not ok:
+            remaining = max(0, FREE_SEARCH_LIMIT - count)
+            await message.answer(
+                f"⚠️ <b>Free search limit reached!</b>\n\n"
+                f"You've used {count}/{FREE_SEARCH_LIMIT} free searches.\n"
+                f"🔑 Use /redeem to upgrade to premium for unlimited searches."
+            )
             return
 
     keyword = message.text.split(" ", 1)[-1].strip() if len(message.text.split(" ")) > 1 else ""
     if not keyword:
         await message.answer("⚠️ Usage: <code>/ulp keyword</code>\n\nExample: <code>/ulp outlook</code>")
         return
-
-    if not is_admin:
-        on_cooldown = await check_cooldown(user_id, keyword)
-        if on_cooldown:
-            await message.answer(f"⏳ You just searched <code>{keyword}</code>. Wait 30s before repeating.")
-            return
 
     cache_key = f"search:ulp:{keyword.lower()}:{MAX_RESULTS}"
 

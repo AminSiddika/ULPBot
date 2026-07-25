@@ -1,4 +1,8 @@
 import os
+import re
+import secrets
+import string
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiogram import Router, types
@@ -7,6 +11,7 @@ from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.config import settings
+from src.database.engine import get_db
 from src.database.repos.log import get_stats
 from src.database.repos.user import get_or_create_user, is_admin
 from src.utils.logger import logger
@@ -356,6 +361,81 @@ async def cmd_export(message: types.Message) -> None:
     logger.info(f"Admin {message.from_user.id} exported {len(files)} DB files")
 
 
+@router.message(Command("genkey"))
+async def cmd_genkey(message: types.Message, command: CommandObject) -> None:
+    if not await _check_admin(message):
+        return
+
+    arg = command.args.strip().lower() if command.args else ""
+    if not arg:
+        await message.answer(
+            "🔑 <b>Generate Premium Keys</b>\n\n"
+            "Usage: <code>/genkey [amount] [duration]</code>\n\n"
+            "Duration formats:\n"
+            "  <code>30min</code> — 30 minutes\n"
+            "  <code>7d</code> — 7 days\n"
+            "  <code>1m</code> — 1 month (30 days)\n"
+            "  <code>1y</code> — 1 year (365 days)\n\n"
+            "Examples:\n"
+            "  <code>/genkey 10min</code> — single 10-min key\n"
+            "  <code>/genkey 3 7d</code> — 3 keys, each 7 days\n"
+            "  <code>/genkey 1m</code> — single 1-month key"
+        )
+        return
+
+    args = arg.split()
+    duration_str = args[-1]
+    quantity = 1
+
+    if len(args) >= 2 and args[0].isdigit():
+        try:
+            quantity = min(int(args[0]), 100)
+            duration_str = args[1]
+        except ValueError:
+            pass
+
+    duration_seconds = _parse_duration(duration_str)
+    if duration_seconds is None or duration_seconds <= 0:
+        await message.answer(f"❌ Invalid duration: <code>{duration_str}</code>\nUse: 30min, 7d, 1m, 1y")
+        return
+
+    keys = []
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    for _ in range(quantity):
+        key = _generate_key()
+        await db.premium_keys.insert_one({
+            "key": key,
+            "duration_seconds": duration_seconds,
+            "used": False,
+            "used_by": None,
+            "used_at": None,
+            "created_by": message.from_user.id,
+            "created_at": now,
+        })
+        keys.append(key)
+
+    duration_label = _format_duration(duration_seconds)
+    if quantity == 1:
+        lines = [
+            f"🔑 <b>Premium Key Generated</b>\n",
+            f"Key: <code>{keys[0]}</code>",
+            f"Duration: <b>{duration_label}</b>",
+            f"\nRedeem: <code>/redeem {keys[0]}</code>",
+        ]
+    else:
+        lines = [f"🔑 <b>{quantity} Premium Keys Generated</b>\n"]
+        lines.append(f"Duration each: <b>{duration_label}</b>\n")
+        for i, k in enumerate(keys, 1):
+            lines.append(f"{i}. <code>/redeem {k}</code>")
+        if len(lines) > 30:
+            lines = lines[:30] + [f"\n... and {quantity - 30} more"]
+
+    await message.answer("\n".join(lines))
+    logger.info(f"Admin {message.from_user.id} generated {quantity} premium key(s) for {duration_label}")
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: types.Message) -> None:
     if not await _check_admin(message):
@@ -374,6 +454,49 @@ async def cmd_stats(message: types.Message) -> None:
             lines.append(f"  /{cmd} — <b>{cnt}</b>")
 
     await message.answer("\n".join(lines))
+
+
+def _generate_key(length: int = 16) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "ULP-" + "-".join(
+        "".join(secrets.choice(alphabet) for _ in range(4))
+        for _ in range(length // 4)
+    )
+
+
+def _parse_duration(s: str) -> int | None:
+    s = s.strip().lower()
+    match = re.match(r"^(\d+)\s*(min|d|day|days|m|month|months|y|year|years)$", s)
+    if not match:
+        return None
+    value = int(match.group(1))
+    unit = match.group(2)
+    match unit:
+        case "min":
+            return value * 60
+        case "d" | "day" | "days":
+            return value * 86400
+        case "m" | "month" | "months":
+            return value * 30 * 86400
+        case "y" | "year" | "years":
+            return value * 365 * 86400
+    return None
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds < 120:
+        return f"{seconds}s"
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    mins = (seconds % 3600) // 60
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if mins:
+        parts.append(f"{mins}m")
+    return " ".join(parts) if parts else f"{seconds}s"
 
 
 def _format_size(size_bytes: int) -> str:

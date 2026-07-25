@@ -1,4 +1,3 @@
-import asyncio
 import json
 from typing import Any
 
@@ -26,7 +25,7 @@ async def connect_redis() -> aioredis.Redis | None:
         _available = True
         logger.info("Redis connected")
     except Exception as e:
-        logger.warning(f"Redis unavailable ({e}) — running without caching or rate limiting")
+        logger.warning(f"Redis unavailable ({e}) — running without caching")
         _available = False
         _redis = None
     return _redis
@@ -79,32 +78,3 @@ async def cache_delete(pattern: str) -> int:
     except Exception:
         _available = False
     return 0
-
-
-async def check_rate_limit(user_id: int, limit: int = 10, window: int = 60) -> bool:
-    if not _available or _redis is None:
-        return False
-    try:
-        key = f"rate_limit:{user_id}"
-        current = await _redis.incr(key)
-        if current == 1:
-            await _redis.expire(key, window)
-        return current > limit
-    except Exception:
-        _available = False
-        return False
-
-
-async def check_cooldown(user_id: int, keyword: str, cooldown: int = 30) -> bool:
-    if not _available or _redis is None:
-        return False
-    try:
-        key = f"cooldown:{user_id}:{keyword.lower()}"
-        exists = await _redis.exists(key)
-        if exists:
-            return True
-        await _redis.set(key, "1", ex=cooldown)
-        return False
-    except Exception:
-        _available = False
-        return False

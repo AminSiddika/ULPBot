@@ -24,6 +24,8 @@ async def on_startup(bot: Bot) -> None:
     await db.users.create_index("user_id", unique=True)
     await db.usage_logs.create_index("user_id")
     await db.usage_logs.create_index("created_at")
+    await db.premium_keys.create_index("key", unique=True)
+    await db.premium_keys.create_index("used")
 
     setup_scheduler()
 
@@ -31,15 +33,19 @@ async def on_startup(bot: Bot) -> None:
 
     commands = [
         BotCommand(command="start", description="Welcome message"),
+        BotCommand(command="register", description="Register to start searching"),
         BotCommand(command="help", description="Show all commands"),
         BotCommand(command="cmds", description="List commands"),
         BotCommand(command="ulp", description="Search ULP database"),
         BotCommand(command="extract", description="Extract specific format"),
         BotCommand(command="cmb", description="Generate combo file"),
+        BotCommand(command="redeem", description="Redeem premium key"),
+        BotCommand(command="userinfo", description="Your usage and status"),
         BotCommand(command="history", description="Search history"),
+        BotCommand(command="ping", description="Bot health check"),
+        BotCommand(command="genkey", description="Generate premium keys (admin)"),
         BotCommand(command="add", description="Upload DB file (admin)"),
         BotCommand(command="files", description="Browse DB files (admin)"),
-        BotCommand(command="clean", description="DB stats & cleanup (admin)"),
         BotCommand(command="stats", description="Usage stats (admin)"),
         BotCommand(command="validate", description="Validate DB files (admin)"),
         BotCommand(command="merge", description="Merge all DB files (admin)"),

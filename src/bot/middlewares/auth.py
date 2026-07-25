@@ -4,7 +4,11 @@ from aiogram import BaseMiddleware, types
 from aiogram.dispatcher.event.bases import CancelHandler
 
 from src.config import settings
-from src.database.repos.user import is_admin
+from src.database.repos.user import is_admin, is_banned, is_registered
+from src.utils.logger import logger
+
+
+PUBLIC_COMMANDS = {"start", "help", "cmds", "register", "redeem", "userinfo", "ping"}
 
 
 class AuthMiddleware(BaseMiddleware):
@@ -24,6 +28,24 @@ class AuthMiddleware(BaseMiddleware):
         user_id = message.from_user.id
         data["is_owner"] = user_id == settings.owner_id
         data["is_admin"] = user_id in {settings.owner_id, *settings.admin_ids_set}
+
+        if isinstance(event, types.Message) and event.text:
+            command = event.text.strip().split()[0].lstrip("/").split("@")[0].lower()
+            if command not in PUBLIC_COMMANDS:
+                if event.from_user:
+                    banned = await is_banned(event.from_user.id)
+                    if banned:
+                        await event.answer("🚫 You are banned from this bot.")
+                        raise CancelHandler()
+
+                    registered = await is_registered(event.from_user.id)
+                    if not registered:
+                        await event.answer(
+                            "⚠️ <b>Registration Required</b>\n\n"
+                            "Please /register first to use the bot.\n"
+                            "Registration gives you 10 free searches.",
+                        )
+                        raise CancelHandler()
 
         return await handler(event, data)
 

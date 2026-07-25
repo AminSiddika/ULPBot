@@ -9,7 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.config import settings
 from src.database.repos.log import log_usage
-from src.services.cache import check_rate_limit
+from src.database.repos.user import FREE_SEARCH_LIMIT, increment_search_count, is_premium
 from src.services.search import count_estimate, generate_combo_file
 from src.utils.logger import logger
 
@@ -85,10 +85,15 @@ async def cmd_cmb(message: types.Message) -> None:
 
     is_admin = user_id == settings.owner_id or user_id in settings.admin_ids_set
 
-    if not is_admin:
-        limited = await check_rate_limit(user_id, limit=10, window=300)
-        if limited:
-            await message.answer("⏳ Combo generation is rate-limited. Try again in 5 minutes.")
+    if not is_admin and not await is_premium(user_id):
+        count, ok = await increment_search_count(user_id)
+        if not ok:
+            remaining = max(0, FREE_SEARCH_LIMIT - count)
+            await message.answer(
+                f"⚠️ <b>Free search limit reached!</b>\n\n"
+                f"You've used {count}/{FREE_SEARCH_LIMIT} free searches.\n"
+                f"🔑 Use /redeem to upgrade to premium for unlimited searches."
+            )
             return
 
     parts = message.text.split(" ", 1)

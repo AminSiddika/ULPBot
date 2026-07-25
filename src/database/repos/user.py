@@ -1,9 +1,11 @@
 import enum
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.database.engine import get_db
 from src.utils.logger import logger
+
+FREE_SEARCH_LIMIT = 10
 
 
 class UserRole(str, enum.Enum):
@@ -26,6 +28,10 @@ async def get_or_create_user(
             "username": username,
             "first_name": first_name,
             "role": UserRole.USER.value,
+            "is_registered": False,
+            "is_premium": False,
+            "premium_expiry": None,
+            "search_count": 0,
             "is_banned": False,
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
@@ -46,6 +52,81 @@ async def get_or_create_user(
         doc["first_name"] = first_name
 
     return doc
+
+
+async def register_user(user_id: int) -> bool:
+    db = get_db()
+    result = await db.users.update_one(
+        {"user_id": user_id, "is_registered": False},
+        {"$set": {
+            "is_registered": True,
+            "registered_at": datetime.now(timezone.utc),
+            "search_count": 0,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    return result.modified_count > 0
+
+
+async def is_registered(user_id: int) -> bool:
+    db = get_db()
+    doc = await db.users.find_one({"user_id": user_id, "is_registered": True})
+    return doc is not None
+
+
+async def get_user(user_id: int) -> dict[str, Any] | None:
+    db = get_db()
+    return await db.users.find_one({"user_id": user_id})
+
+
+async def is_premium(user_id: int) -> bool:
+    db = get_db()
+    doc = await db.users.find_one({"user_id": user_id, "is_premium": True})
+    if doc is None:
+        return False
+    expiry = doc.get("premium_expiry")
+    if expiry and isinstance(expiry, datetime):
+        if expiry < datetime.now(timezone.utc):
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"is_premium": False, "premium_expiry": None}},
+            )
+            return False
+    return True
+
+
+async def increment_search_count(user_id: int) -> tuple[int, bool]:
+    db = get_db()
+    premium = await is_premium(user_id)
+    if premium:
+        return 0, True
+
+    doc = await db.users.find_one({"user_id": user_id})
+    if doc is None:
+        return 0, False
+
+    current = doc.get("search_count", 0)
+    if current >= FREE_SEARCH_LIMIT:
+        return current, False
+
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"search_count": 1}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+    )
+    return current + 1, True
+
+
+async def set_premium(user_id: int, duration: timedelta) -> None:
+    db = get_db()
+    expiry = datetime.now(timezone.utc) + duration
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "is_premium": True,
+            "premium_expiry": expiry,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
 
 
 async def is_admin(user: dict[str, Any], owner_id: int, admin_ids: set[int]) -> bool:

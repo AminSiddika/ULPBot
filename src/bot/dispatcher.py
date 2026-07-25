@@ -10,6 +10,7 @@ from src.bot.handlers import (
     extract,
     help,
     history,
+    premium,
     start,
     ulp,
     validate,
@@ -31,6 +32,7 @@ def setup_dispatcher() -> Dispatcher:
     dp.include_router(errors.router)
     dp.include_router(start.router)
     dp.include_router(help.router)
+    dp.include_router(premium.router)
     dp.include_router(ulp.router)
     dp.include_router(extract.router)
     dp.include_router(combo.router)

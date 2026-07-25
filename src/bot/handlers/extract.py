@@ -7,9 +7,9 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from src.config import settings
 from src.database.repos.log import log_usage
-from src.services.cache import cache_get, cache_set, check_cooldown, check_rate_limit
+from src.database.repos.user import FREE_SEARCH_LIMIT, increment_search_count, is_premium
+from src.services.cache import cache_get, cache_set
 from src.services.search import search_ulp
 
 router = Router()
@@ -47,12 +47,15 @@ def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
 async def cmd_extract(message: types.Message) -> None:
     user_id = message.from_user.id
 
-    is_admin = user_id == settings.owner_id or user_id in settings.admin_ids_set
-
-    if not is_admin:
-        limited = await check_rate_limit(user_id, limit=15, window=60)
-        if limited:
-            await message.answer("⏳ Rate limit exceeded. Please wait a moment.")
+    if not await is_premium(user_id):
+        count, ok = await increment_search_count(user_id)
+        if not ok:
+            remaining = max(0, FREE_SEARCH_LIMIT - count)
+            await message.answer(
+                f"⚠️ <b>Free search limit reached!</b>\n\n"
+                f"You've used {count}/{FREE_SEARCH_LIMIT} free searches.\n"
+                f"🔑 Use /redeem to upgrade to premium for unlimited searches."
+            )
             return
 
     parts = message.text.split(" ", 2)
@@ -71,13 +74,6 @@ async def cmd_extract(message: types.Message) -> None:
         await message.answer(f"❌ Unknown format: <b>{fmt_key}</b>\nValid: mail:pass, user:pass, number:pass, raw")
         return
 
-    full_key = f"{fmt_key}:{keyword}"
-    if not is_admin:
-        on_cooldown = await check_cooldown(user_id, full_key)
-        if on_cooldown:
-            await message.answer(f"⏳ You just searched <code>{fmt_key} {keyword}</code>. Wait 30s before repeating.")
-            return
-
     format_type = FORMATS[fmt_key]
     cache_key = f"search:extract:{fmt_key}:{keyword.lower()}:{MAX_RESULTS}"
 
@@ -85,7 +81,7 @@ async def cmd_extract(message: types.Message) -> None:
     if cached is not None:
         results, total = cached
         await _send_paginated(message, fmt_key, keyword, results, total, 0)
-        await log_usage(user_id, "extract", full_key, len(results))
+        await log_usage(user_id, "extract", f"{fmt_key}:{keyword}", len(results))
         return
 
     progress_msg = await message.answer(f"⠋ Extracting <b>{fmt_key}</b> for: <b>{keyword}</b>...")
@@ -105,11 +101,11 @@ async def cmd_extract(message: types.Message) -> None:
 
     if not results:
         await progress_msg.edit_text(f"❌ No {fmt_key} matches for: <b>{keyword}</b>")
-        await log_usage(user_id, "extract", full_key, 0)
+        await log_usage(user_id, "extract", f"{fmt_key}:{keyword}", 0)
         return
 
     await cache_set(cache_key, (results, total), ttl=300)
-    await log_usage(user_id, "extract", full_key, len(results))
+    await log_usage(user_id, "extract", f"{fmt_key}:{keyword}", len(results))
     await _send_paginated(message, fmt_key, keyword, results, total, 0, edit_msg=progress_msg)
 
 
