@@ -56,8 +56,16 @@ async def cmd_start(message: types.Message, command: CommandObject) -> None:
     builder = InlineKeyboardBuilder()
     builder.button(text="📢 Channel", url="https://t.me/ulpbotchannel")
 
+    kb = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="🔍 /ulp"), types.KeyboardButton(text="📤 /extract"), types.KeyboardButton(text="📦 /cmb")],
+            [types.KeyboardButton(text="👤 /userinfo"), types.KeyboardButton(text="📜 /history"), types.KeyboardButton(text="❓ /help")],
+        ],
+        resize_keyboard=True,
+    )
+
     await message.answer(
-        "🤖 <b>ULP Bot v3</b>\n\n"
+        "🤖 <b>ULP Bot v4</b>\n\n"
         "Search ULP databases, extract combos, and generate custom combo files.\n\n"
         "Commands:\n"
         "/cmds — List all commands\n"
@@ -66,7 +74,7 @@ async def cmd_start(message: types.Message, command: CommandObject) -> None:
         "/cmb keyword — Generate combo file\n\n"
         "Tip: Share links like <code>t.me/bot?start=outlook</code> to auto-search!\n\n"
         "Use /help for detailed information.",
-        reply_markup=builder.as_markup(),
+        reply_markup=kb,
     )
 
 

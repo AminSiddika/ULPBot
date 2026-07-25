@@ -8,7 +8,7 @@ from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.database.repos.log import log_usage
-from src.database.repos.user import FREE_SEARCH_LIMIT, increment_search_count, is_premium
+from src.database.repos.user import FREE_SEARCH_LIMIT, get_user, increment_search_count, is_premium
 from src.services.cache import cache_get, cache_set
 from src.services.search import search_ulp
 
@@ -20,6 +20,7 @@ MAX_INLINE_LINES = 50
 PAGE_SIZE = 30
 
 SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+WARN_THRESHOLD = 5
 
 
 @router.message(Command("ulp"))
@@ -36,6 +37,13 @@ async def cmd_ulp(message: types.Message) -> None:
                 f"🔑 Use /redeem to upgrade to premium for unlimited searches."
             )
             return
+        remaining = max(0, FREE_SEARCH_LIMIT - count)
+        if remaining <= WARN_THRESHOLD:
+            await message.answer(
+                f"⚠️ <b>{remaining} search{'s' if remaining != 1 else ''} remaining!</b> "
+                f"Used: {count}/{FREE_SEARCH_LIMIT}. "
+                f"Use /redeem to upgrade.",
+            )
 
     keyword = message.text.split(" ", 1)[-1].strip() if len(message.text.split(" ")) > 1 else ""
     if not keyword:
@@ -73,7 +81,9 @@ async def cmd_ulp(message: types.Message) -> None:
 
     await cache_set(cache_key, (results, total), ttl=300)
     await log_usage(user_id, "ulp", keyword, len(results))
-    await _send_paginated(message, keyword, results, total, 0, edit_msg=progress_msg)
+
+    footer = await _usage_footer(user_id)
+    await _send_paginated(message, keyword, results, total, 0, edit_msg=progress_msg, footer=footer)
 
 
 def _start_spinner(message: types.Message, text: str) -> asyncio.Task:
@@ -96,6 +106,7 @@ async def _send_paginated(
     total: int,
     page: int = 0,
     edit_msg: types.Message | None = None,
+    footer: str = "",
 ) -> None:
     total_pages = max(1, (len(results) - 1) // PAGE_SIZE + 1)
     page = min(max(page, 0), total_pages - 1)
@@ -104,7 +115,7 @@ async def _send_paginated(
 
     header = f"🔍 Results for: <b>{keyword}</b>\nTotal: {len(results)}/{total} · Page {page + 1}/{total_pages}\n<pre>"
     body = "\n".join(chunk)
-    full_text = header + body + "</pre>"
+    full_text = header + body + "</pre>" + footer
 
     if len(full_text) > MAX_RESPONSE_LENGTH or len(results) > MAX_INLINE_LINES:
         await _send_as_file(message, keyword, results, total, edit_msg)
@@ -196,3 +207,14 @@ def _extract_keyword_from_text(text: str) -> str | None:
     end = text.index("</b>", start)
     raw = text[start:end]
     return raw.split("\n")[0].strip()
+
+
+async def _usage_footer(user_id: int) -> str:
+    if await is_premium(user_id):
+        return "\n\n⭐ Premium · unlimited searches"
+    doc = await get_user(user_id)
+    if doc is None:
+        return ""
+    used = doc.get("search_count", 0)
+    remaining = max(0, FREE_SEARCH_LIMIT - used)
+    return f"\n\n🔍 Free search: {remaining}/{FREE_SEARCH_LIMIT} remaining"

@@ -436,6 +436,96 @@ async def cmd_genkey(message: types.Message, command: CommandObject) -> None:
     logger.info(f"Admin {message.from_user.id} generated {quantity} premium key(s) for {duration_label}")
 
 
+@router.message(Command("keys"))
+async def cmd_keys(message: types.Message) -> None:
+    if not await _check_admin(message):
+        return
+
+    db = get_db()
+    total = await db.premium_keys.count_documents({})
+    unused_count = await db.premium_keys.count_documents({"used": False})
+    used_count = total - unused_count
+
+    cursor = db.premium_keys.find().sort("created_at", -1).limit(20)
+    keys_list = [doc async for doc in cursor]
+
+    lines = [
+        f"🔑 <b>Premium Keys</b>\n",
+        f"Total: {total} | Unused: <b>{unused_count}</b> | Used: {used_count}\n",
+    ]
+
+    for k in keys_list:
+        used = "✅" if k.get("used") else "⏳"
+        dur = _format_duration(k.get("duration_seconds", 0))
+        uid = f" | user: {k['used_by']}" if k.get("used_by") else ""
+        lines.append(f"{used} <code>{k['key']}</code> — {dur}{uid}")
+
+    if len(lines) > 25:
+        lines = lines[:25] + [f"\n... showing last 20 of {total} keys"]
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("premium_users"))
+async def cmd_premium_users(message: types.Message) -> None:
+    if not await _check_admin(message):
+        return
+
+    db = get_db()
+    from datetime import timezone as tz
+    now = __import__("datetime").datetime.now(tz.utc)
+    cursor = db.users.find({"is_premium": True}).sort("premium_expiry", 1).limit(30)
+    users = [doc async for doc in cursor]
+
+    if not users:
+        await message.answer("📭 No premium users found.")
+        return
+
+    lines = [f"⭐ <b>Premium Users</b> ({len(users)})\n"]
+    for u in users:
+        uid = u.get("user_id", "—")
+        name = u.get("first_name", "Unknown")
+        exp = u.get("premium_expiry")
+        if isinstance(exp, __import__("datetime").datetime):
+            if exp < now:
+                lines.append(f"❌ <code>{uid}</code> {name} — <b>EXPIRED</b>")
+            else:
+                days = (exp - now).days
+                lines.append(f"⭐ <code>{uid}</code> {name} — {exp.strftime('%Y-%m-%d')} ({days}d left)")
+        else:
+            lines.append(f"⭐ <code>{uid}</code> {name} — no expiry")
+
+    if len(lines) > 30:
+        lines = lines[:30] + [f"\n... and {len(users) - 30} more"]
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("reset"))
+async def cmd_reset(message: types.Message, command: CommandObject) -> None:
+    if not await _check_admin(message):
+        return
+
+    target_id = None
+    if command.args and command.args.strip().isdigit():
+        target_id = int(command.args.strip())
+    elif message.reply_to_message and message.reply_to_message.from_user:
+        target_id = message.reply_to_message.from_user.id
+
+    if target_id is None:
+        await message.answer("⚠️ Usage: <code>/reset user_id</code> or reply to a user's message.")
+        return
+
+    db = get_db()
+    result = await db.users.update_one(
+        {"user_id": target_id},
+        {"$set": {"search_count": 0, "updated_at": __import__("datetime").datetime.now(timezone.utc)}},
+    )
+    if result.modified_count:
+        await message.answer(f"✅ Search count reset for user <code>{target_id}</code>.")
+        logger.info(f"Admin {message.from_user.id} reset search count for user {target_id}")
+    else:
+        await message.answer(f"⚠️ User <code>{target_id}</code> not found.")
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: types.Message) -> None:
     if not await _check_admin(message):
